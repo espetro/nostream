@@ -2,7 +2,7 @@
   "info": {
     "relay_url": "wss://nostream.your-domain.com",
     "name": "nostream.your-domain.com",
-    "description": "A nostr relay written in Typescript.",
+    "description": "A nostr relay written in TypeScript.",
     "pubkey": "replace-with-your-pubkey",
     "contact": "operator@your-domain.com"
   },
