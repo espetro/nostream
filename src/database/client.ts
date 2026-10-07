@@ -1,7 +1,10 @@
 import 'pg'
 import 'pg-query-stream'
 import knex, { Knex } from 'knex'
+import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { createLogger } from '../factories/logger-factory'
+import { getDbFile, isSqliteDb, SQLITE_KNEX_CLIENT } from './dialect'
 
 const poolLogger = createLogger('database-client:pool-monitor')
 
@@ -24,8 +27,41 @@ const poolLogger = createLogger('database-client:pool-monitor')
   }
 })(knex)
 
-const getMasterConfig = (): Knex.Config =>
-  ({
+const getSqliteMasterConfig = (): Knex.Config => {
+  const filename = getDbFile()
+
+  if (filename !== ':memory:') {
+    mkdirSync(dirname(filename), { recursive: true })
+  }
+
+  return {
+    tag: 'master',
+    client: SQLITE_KNEX_CLIENT,
+    connection: { filename },
+    useNullAsDefault: true,
+    pool: {
+      min: 0,
+      max: 1,
+      idleTimeoutMillis: 60000,
+      // WAL lets every clustered worker process share the one database file:
+      // concurrent readers plus a single serialized writer.
+      afterCreate: (connection: any, done: (err?: Error, conn?: any) => void) => {
+        connection.pragma('journal_mode = WAL')
+        connection.pragma('synchronous = NORMAL')
+        connection.pragma('busy_timeout = 10000')
+        connection.pragma('foreign_keys = ON')
+        done(undefined, connection)
+      },
+    },
+  } as any
+}
+
+const getMasterConfig = (): Knex.Config => {
+  if (isSqliteDb()) {
+    return getSqliteMasterConfig()
+  }
+
+  return {
     tag: 'master',
     client: 'pg',
     connection: process.env.DB_URI
@@ -49,7 +85,8 @@ const getMasterConfig = (): Knex.Config =>
     acquireConnectionTimeout: process.env.DB_ACQUIRE_CONNECTION_TIMEOUT
       ? Number(process.env.DB_ACQUIRE_CONNECTION_TIMEOUT)
       : 60000,
-  }) as any
+  } as any
+}
 
 const getReadReplicaConfigByIndex = (index: number): Knex.Config =>
   ({
@@ -94,7 +131,8 @@ export const getMasterDbClient = () => {
 let readClient: Knex
 
 export const getReadReplicaDbClient = () => {
-  if (process.env.READ_REPLICA_ENABLED !== 'true') {
+  // SQLite has no replicas; reads share the embedded connection.
+  if (isSqliteDb() || process.env.READ_REPLICA_ENABLED !== 'true') {
     return getMasterDbClient()
   }
 

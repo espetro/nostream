@@ -4,6 +4,7 @@ import { DBUser, User } from '../@types/user'
 import { fromDBUser, toBuffer } from '../utils/transform'
 import { IEventRepository, IUserRepository } from '../@types/repositories'
 import { createLogger } from '../factories/logger-factory'
+import { isSqliteClient } from '../database/dialect'
 
 const logger = createLogger('user-repository')
 
@@ -132,6 +133,27 @@ export class UserRepository implements IUserRepository {
     logger('admit user: %s at %s', pubkey, admittedAt)
 
     try {
+      if (isSqliteClient(client)) {
+        // Port of the Postgres admit_user() function (see
+        // migrations/20260409201624_admit_user_func.js).
+        const now = new Date()
+        await client('users')
+          .insert({
+            pubkey: toBuffer(pubkey),
+            is_admitted: true,
+            tos_accepted_at: admittedAt,
+            created_at: now,
+            updated_at: now,
+          })
+          .onConflict('pubkey')
+          .merge({
+            is_admitted: true,
+            tos_accepted_at: admittedAt,
+            updated_at: now,
+          })
+        return
+      }
+
       await client.raw('select admit_user(?, ?)', [toBuffer(pubkey), admittedAt.toISOString()])
     } catch (error) {
       logger.error('Unable to admit user. Reason:', error)

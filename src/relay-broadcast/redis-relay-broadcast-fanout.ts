@@ -1,9 +1,8 @@
-import { createClient } from 'redis'
 import { hostname } from 'os'
 
 import { CacheClient } from '../@types/cache'
 import { createLogger } from '../factories/logger-factory'
-import { getCacheConfig } from '../cache/client'
+import { createCacheClient } from '../cache/client'
 import {
   getRelayBroadcastStreamKey,
   getRelayBroadcastStreamMaxLen,
@@ -47,10 +46,9 @@ export class RedisRelayBroadcastFanout {
     }
 
     this.running = true
-    const config = getCacheConfig()
 
-    this.publisher = createClient(config)
-    this.subscriber = createClient(config)
+    this.publisher = createCacheClient()
+    this.subscriber = createCacheClient()
 
     this.publisher.on('error', (error) => logger.error('publisher error: %o', error))
     this.subscriber.on('error', (error) => logger.error('subscriber error: %o', error))
