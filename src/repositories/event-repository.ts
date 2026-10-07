@@ -21,6 +21,7 @@ import {
   EventExpirationTimeMetadataKey,
   EventKinds,
 } from '../constants/base'
+import { Knex } from 'knex'
 import { DatabaseClient, EventId } from '../@types/base'
 import { DBEvent, Event } from '../@types/event'
 import { EventPurgeCounts, EventRetentionOptions, IEventRepository, IQueryResult } from '../@types/repositories'
@@ -28,6 +29,7 @@ import { toBuffer, toJSON } from '../utils/transform'
 import { createLogger } from '../factories/logger-factory'
 import { isGenericTagQuery, isGeohashPrefixCriterion, stripGeohashPrefixWildcard } from '../utils/filter'
 import { SubscriptionFilter } from '../@types/subscription'
+import { isSqliteClient, nowExpression } from '../database/dialect'
 
 const logger = createLogger('event-repository')
 const RETENTION_BATCH_SIZE = 1000
@@ -46,6 +48,29 @@ const DEFAULT_MAX_SEARCH_QUERY_LENGTH = 256
 
 interface FilterConditionFlags {
   isSearchQuery: boolean
+}
+
+/**
+ * Translates a NIP-50 search string into an FTS5 MATCH query. Words are
+ * ANDed to approximate plainto_tsquery's semantics; embedded quotes are
+ * doubled to stay inside a quoted FTS5 string.
+ */
+const toFts5Query = (searchQuery: string): string =>
+  searchQuery
+    .split(/\s+/)
+    .filter((token) => token.length > 0)
+    .map((token) => `"${token.replace(/"/g, '""')}"`)
+    .join(' AND ')
+
+/**
+ * Postgres resolves write queries to { rowCount }; SQLite (via RETURNING)
+ * resolves to the rows actually written. Normalize both to a count.
+ */
+const toRowCount = (result: unknown): number => {
+  if (Array.isArray(result)) {
+    return result.length
+  }
+  return (prop('rowCount')(result as { rowCount?: number }) as number | undefined) ?? 0
 }
 
 export class EventRepository implements IEventRepository {
@@ -68,14 +93,20 @@ export class EventRepository implements IEventRepository {
       isSearchQueries.push(isSearchQuery)
 
       if (isSearchQuery) {
-        const tsConfig = this.getNip50Language()
         const nip50Settings = this.settings?.()
         const maxLen = nip50Settings?.nip50?.maxQueryLength ?? DEFAULT_MAX_SEARCH_QUERY_LENGTH
         const searchQuery = currentFilter.search.trim().slice(0, maxLen)
-        const searchSelection = this.readReplicaDbClient.raw(
-          'events.*, ts_rank(to_tsvector(?::regconfig, event_content), plainto_tsquery(?::regconfig, ?)) AS search_rank',
-          [tsConfig, tsConfig, searchQuery],
-        )
+        const searchSelection = this.isSqlite()
+          ? // bm25 is negative (smaller = better); negate so DESC ordering
+            // matches Postgres ts_rank semantics.
+            this.readReplicaDbClient.raw(
+              'events.*, (SELECT -bm25(events_fts) FROM events_fts WHERE events_fts MATCH ? AND events_fts.rowid = events.rowid) AS search_rank',
+              [toFts5Query(searchQuery)],
+            )
+          : this.readReplicaDbClient.raw(
+              'events.*, ts_rank(to_tsvector(?::regconfig, event_content), plainto_tsquery(?::regconfig, ?)) AS search_rank',
+              [this.getNip50Language(), this.getNip50Language(), searchQuery],
+            )
         builder.select(searchSelection)
       }
 
@@ -166,13 +197,20 @@ export class EventRepository implements IEventRepository {
     if (typeof currentFilter.search === 'string' && currentFilter.search.trim().length > 0) {
       const nip50Settings = this.settings?.()
       if (nip50Settings?.nip50?.enabled) {
-        const tsConfig = this.getNip50Language()
         const maxLen = nip50Settings.nip50.maxQueryLength ?? DEFAULT_MAX_SEARCH_QUERY_LENGTH
         const searchQuery = currentFilter.search.trim().slice(0, maxLen)
-        builder.andWhereRaw(
-          'to_tsvector(?::regconfig, event_content) @@ plainto_tsquery(?::regconfig, ?)',
-          [tsConfig, tsConfig, searchQuery],
-        )
+        if (this.isSqlite()) {
+          builder.andWhereRaw(
+            'events.rowid IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)',
+            [toFts5Query(searchQuery)],
+          )
+        } else {
+          const tsConfig = this.getNip50Language()
+          builder.andWhereRaw(
+            'to_tsvector(?::regconfig, event_content) @@ plainto_tsquery(?::regconfig, ?)',
+            [tsConfig, tsConfig, searchQuery],
+          )
+        }
         isSearchQuery = true
       }
     }
@@ -233,6 +271,7 @@ export class EventRepository implements IEventRepository {
     }
 
     const groups = this.groupHexCriteria(criteria)
+    const sqlite = this.isSqlite()
 
     tableFields.forEach((tableField) => {
       if (groups.exact.length) {
@@ -240,15 +279,27 @@ export class EventRepository implements IEventRepository {
       }
 
       groups.even.forEach((prefix) => {
-        builder.orWhereRaw(`substring("${tableField}" from 1 for ?) = ?`, [prefix.length >> 1, toBuffer(prefix)])
+        if (sqlite) {
+          builder.orWhereRaw(`substr("${tableField}", 1, ?) = ?`, [prefix.length >> 1, toBuffer(prefix)])
+        } else {
+          builder.orWhereRaw(`substring("${tableField}" from 1 for ?) = ?`, [prefix.length >> 1, toBuffer(prefix)])
+        }
       })
 
       groups.odd.forEach((prefix) => {
-        builder.orWhereRaw(`substring("${tableField}" from 1 for ?) BETWEEN ? AND ?`, [
-          (prefix.length >> 1) + 1,
-          `\\x${prefix}0`,
-          `\\x${prefix}f`,
-        ])
+        if (sqlite) {
+          builder.orWhereRaw(`substr("${tableField}", 1, ?) BETWEEN ? AND ?`, [
+            (prefix.length >> 1) + 1,
+            toBuffer(`${prefix}0`),
+            toBuffer(`${prefix}f`),
+          ])
+        } else {
+          builder.orWhereRaw(`substring("${tableField}" from 1 for ?) BETWEEN ? AND ?`, [
+            (prefix.length >> 1) + 1,
+            `\\x${prefix}0`,
+            `\\x${prefix}f`,
+          ])
+        }
       })
     })
   }
@@ -314,7 +365,7 @@ export class EventRepository implements IEventRepository {
   }
 
   public async create(event: Event): Promise<number> {
-    return this.insert(event).then(prop('rowCount') as () => number, () => 0)
+    return this.withRowCount(this.insert(event))
   }
 
   public async createMany(events: Event[]): Promise<number> {
@@ -324,11 +375,12 @@ export class EventRepository implements IEventRepository {
 
     const rows = events.map((event) => this.toInsertRow(event))
 
-    return this.masterDbClient('events')
-      .insert(rows)
-      .onConflict()
-      .ignore()
-      .then(prop('rowCount') as () => number, () => 0)
+    return this.withRowCount(
+      this.masterDbClient('events')
+        .insert(rows)
+        .onConflict()
+        .ignore(),
+    )
   }
 
   private toInsertRow(event: Event) {
@@ -381,13 +433,15 @@ export class EventRepository implements IEventRepository {
         })
       })
 
+    const resultQuery = this.isSqlite() ? query.returning('id') : query
+
     return {
       then: <T1, T2>(
         onfulfilled: (value: number) => T1 | PromiseLike<T1>,
         onrejected: (reason: any) => T2 | PromiseLike<T2>,
-      ) => query.then(prop('rowCount') as () => number).then(onfulfilled, onrejected),
-      catch: <T>(onrejected: (reason: any) => T | PromiseLike<T>) => query.catch(onrejected),
-      toString: (): string => query.toString(),
+      ) => resultQuery.then(toRowCount).then(onfulfilled, onrejected),
+      catch: <T>(onrejected: (reason: any) => T | PromiseLike<T>) => resultQuery.catch(onrejected),
+      toString: (): string => resultQuery.toString(),
     } as Promise<number>
   }
 
@@ -398,7 +452,7 @@ export class EventRepository implements IEventRepository {
 
     const rows = events.map((event) => this.toUpsertRow(event))
 
-    return this.masterDbClient('events')
+    const query = this.masterDbClient('events')
       .insert(rows)
       .onConflict(
         this.masterDbClient.raw(
@@ -417,7 +471,8 @@ export class EventRepository implements IEventRepository {
       .whereRaw(
         '("events"."event_created_at" < "excluded"."event_created_at" or ("events"."event_created_at" = "excluded"."event_created_at" and "events"."event_id" > "excluded"."event_id"))',
       )
-      .then(prop('rowCount') as () => number, () => 0)
+
+    return this.withRowCount(query)
   }
 
   private toUpsertRow(event: Event) {
@@ -455,7 +510,7 @@ export class EventRepository implements IEventRepository {
       .whereNot('event_kind', EventKinds.REQUEST_TO_VANISH)
       .whereNull('deleted_at')
       .update({
-        deleted_at: this.masterDbClient.raw('now()'),
+        deleted_at: nowExpression(this.masterDbClient),
       })
   }
 
@@ -467,7 +522,7 @@ export class EventRepository implements IEventRepository {
       .whereNotIn('event_kind', excludedKinds)
       .whereNull('deleted_at')
       .update({
-        deleted_at: this.masterDbClient.raw('now()'),
+        deleted_at: nowExpression(this.masterDbClient),
       })
   }
 
@@ -565,6 +620,19 @@ export class EventRepository implements IEventRepository {
         }
       })
     })
+  }
+
+  private isSqlite(): boolean {
+    return isSqliteClient(this.masterDbClient as Knex)
+  }
+
+  /**
+   * Adds RETURNING on SQLite so an ignored ON CONFLICT reports 0 rows
+   * (better-sqlite3 otherwise resolves to the last rowid regardless).
+   */
+  private withRowCount(query: Knex.QueryBuilder): Promise<number> {
+    const resultQuery = this.isSqlite() ? query.returning('id') : query
+    return resultQuery.then(toRowCount, () => 0)
   }
 
   private mapToPurgeCounts(

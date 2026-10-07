@@ -9,6 +9,7 @@ import {
 } from '../@types/notification-outbox'
 import { INotificationOutboxRepository } from '../@types/repositories'
 import { createLogger } from '../factories/logger-factory'
+import { isSqliteClient } from '../database/dialect'
 
 const logger = createLogger('notification-outbox-repository')
 
@@ -69,7 +70,7 @@ export class NotificationOutboxRepository implements INotificationOutboxReposito
       const now = new Date()
       const staleBefore = new Date(now.getTime() - NOTIFICATION_OUTBOX_PROCESSING_LEASE_MS)
 
-      const rows = await trx<DBNotificationOutboxMessage>('notification_outbox')
+      const claimQuery = trx<DBNotificationOutboxMessage>('notification_outbox')
         .where((builder) => {
           builder
             .where((pending) => {
@@ -85,9 +86,13 @@ export class NotificationOutboxRepository implements INotificationOutboxReposito
         })
         .orderBy('created_at', 'asc')
         .limit(limit)
-        .forUpdate()
-        .skipLocked()
-        .select('*')
+
+      if (!isSqliteClient(client)) {
+        // SQLite serializes writers already; FOR UPDATE/SKIP LOCKED don't exist there.
+        claimQuery.forUpdate().skipLocked()
+      }
+
+      const rows = await claimQuery.select('*')
 
       if (!rows.length) {
         return []

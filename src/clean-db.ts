@@ -2,6 +2,7 @@ import { createInterface } from 'readline'
 import { Knex } from 'knex'
 
 import { getMasterDbClient } from './database/client'
+import { isSqliteClient } from './database/dialect'
 
 type CleanDbOptions = {
   all: boolean
@@ -199,6 +200,13 @@ const askForConfirmation = async (): Promise<boolean> => {
 
 const runAllDelete = async (dbClient: Knex): Promise<boolean> => {
   const hasEventTagsTable = await dbClient.schema.hasTable('event_tags')
+  if (isSqliteClient(dbClient)) {
+    if (hasEventTagsTable) {
+      await dbClient.raw('DELETE FROM event_tags;')
+    }
+    await dbClient.raw('DELETE FROM events;')
+    return hasEventTagsTable
+  }
   if (hasEventTagsTable) {
     await dbClient.raw('TRUNCATE TABLE events, event_tags RESTART IDENTITY CASCADE;')
     return true
@@ -211,7 +219,11 @@ const runAllDelete = async (dbClient: Knex): Promise<boolean> => {
 const runSelectiveDelete = async (dbClient: Knex, options: CleanDbOptions): Promise<number> => {
   const deleteQuery = applySelectiveFilters(dbClient('events'), options)
   const deletedRows = await deleteQuery.del()
-  await dbClient.raw('VACUUM ANALYZE events;')
+  if (isSqliteClient(dbClient)) {
+    await dbClient.raw('VACUUM;')
+  } else {
+    await dbClient.raw('VACUUM ANALYZE events;')
+  }
   return Number(deletedRows)
 }
 

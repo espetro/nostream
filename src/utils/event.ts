@@ -21,13 +21,18 @@ export const serializeEvent = (event: UnidentifiedEvent): CanonicalEvent => [
   event.content,
 ]
 
+// SQLite stores event_tags as a JSON TEXT column; Postgres jsonb arrives
+// already parsed. Normalize so both dialects hand back Tag[].
+const parseTagsColumn = (tags: Tag[] | string): Tag[] =>
+  typeof tags === 'string' ? JSON.parse(tags) : tags
+
 export const toNostrEvent: (event: DBEvent) => Event = applySpec({
   id: pipe(prop('event_id') as () => Buffer, fromBuffer),
   kind: prop('event_kind') as () => number,
   pubkey: pipe(prop('event_pubkey') as () => Buffer, fromBuffer),
   created_at: prop('event_created_at') as () => number,
   content: prop('event_content') as () => string,
-  tags: prop('event_tags') as () => Tag[],
+  tags: pipe(prop('event_tags') as () => Tag[] | string, parseTagsColumn),
   sig: pipe(prop('event_signature') as () => Buffer, fromBuffer),
 })
 
