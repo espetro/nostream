@@ -1,27 +1,6 @@
-const path = require('node:path')
-const fs = require('node:fs')
+const dialectSpecifier = (process.env.DB_ADAPTER || process.env.DB_CLIENT || 'pg').trim().toLowerCase()
 
-const dbClient = (process.env.DB_CLIENT || 'pg').trim().toLowerCase()
-const isSqlite = ['sqlite', 'sqlite3', 'better-sqlite3'].includes(dbClient)
-
-if (isSqlite) {
-  const dbFile = process.env.DB_FILE || './data/nostream.db'
-  if (dbFile !== ':memory:') {
-    fs.mkdirSync(path.dirname(dbFile), { recursive: true })
-  }
-
-  module.exports = {
-    client: 'better-sqlite3',
-    connection: { filename: dbFile },
-    useNullAsDefault: true,
-    migrations: {
-      directory: './migrations-sqlite',
-    },
-    seeds: {
-      directory: './seeds',
-    },
-  }
-} else {
+if (['pg', 'postgres', 'postgresql'].includes(dialectSpecifier)) {
   module.exports = {
     client: 'pg',
     connection: process.env.DATABASE_URI ? process.env.DATABASE_URI : {
@@ -33,6 +12,25 @@ if (isSqlite) {
     },
     seeds: {
       directory: './seeds',
+    },
+  }
+} else {
+  // Alternative storage dialect (built-in or community DB_ADAPTER module):
+  // the adapter supplies its own client config and migrations directory.
+  require('ts-node').register({
+    transpileOnly: true,
+    compilerOptions: { module: 'commonjs' },
+  })
+  const { resolveStorageDialect } = require('./src/database/dialects')
+  const adapter = resolveStorageDialect()
+
+  module.exports = {
+    ...adapter.masterConfig(),
+    migrations: {
+      directory: adapter.migrationsDirectory,
+    },
+    seeds: {
+      directory: adapter.seedsDirectory ?? './seeds',
     },
   }
 }

@@ -2,7 +2,7 @@ import { createInterface } from 'readline'
 import { Knex } from 'knex'
 
 import { getMasterDbClient } from './database/client'
-import { isSqliteClient } from './database/dialect'
+import { detectStorageDialect } from './database/dialects'
 
 type CleanDbOptions = {
   all: boolean
@@ -200,29 +200,18 @@ const askForConfirmation = async (): Promise<boolean> => {
 
 const runAllDelete = async (dbClient: Knex): Promise<boolean> => {
   const hasEventTagsTable = await dbClient.schema.hasTable('event_tags')
-  if (isSqliteClient(dbClient)) {
-    if (hasEventTagsTable) {
-      await dbClient.raw('DELETE FROM event_tags;')
-    }
-    await dbClient.raw('DELETE FROM events;')
-    return hasEventTagsTable
+  for (const statement of detectStorageDialect(dbClient).truncateEventsStatements(hasEventTagsTable)) {
+    await dbClient.raw(statement)
   }
-  if (hasEventTagsTable) {
-    await dbClient.raw('TRUNCATE TABLE events, event_tags RESTART IDENTITY CASCADE;')
-    return true
-  }
-
-  await dbClient.raw('TRUNCATE TABLE events RESTART IDENTITY CASCADE;')
-  return false
+  return hasEventTagsTable
 }
 
 const runSelectiveDelete = async (dbClient: Knex, options: CleanDbOptions): Promise<number> => {
   const deleteQuery = applySelectiveFilters(dbClient('events'), options)
   const deletedRows = await deleteQuery.del()
-  if (isSqliteClient(dbClient)) {
-    await dbClient.raw('VACUUM;')
-  } else {
-    await dbClient.raw('VACUUM ANALYZE events;')
+  const vacuumStatement = detectStorageDialect(dbClient).vacuumEventsStatement()
+  if (vacuumStatement) {
+    await dbClient.raw(vacuumStatement)
   }
   return Number(deletedRows)
 }
