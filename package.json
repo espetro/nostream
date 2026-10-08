@@ -56,6 +56,7 @@
   "scripts": {
     "cli": "node --env-file-if-exists=.env -r ts-node/register src/cli/index.ts",
     "dev": "node --env-file-if-exists=.env -r ts-node/register src/index.ts",
+    "build:native": "bash scripts/build-native.sh",
     "clean-db": "node --env-file-if-exists=.env -r ts-node/register src/clean-db.ts",
     "clean": "rimraf ./{dist,.nyc_output,.test-reports,.coverage}",
     "build": "tsc --project tsconfig.build.json",
