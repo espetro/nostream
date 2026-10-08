@@ -65,6 +65,9 @@ exports.up = async function (knex) {
   await knex.schema.table('event_tags', (table) => {
     table.index('event_id')
     table.index(['tag_name', 'tag_value'])
+    // Correlated EXISTS probes in the tag-filter path resolve fully in-index:
+    // without this, SQLite scans the (tag_name, tag_value) index per outer row.
+    table.index(['event_id', 'tag_name', 'tag_value'])
   })
 
   // Expand the JSON event_tags column into rows, mirroring the Postgres
