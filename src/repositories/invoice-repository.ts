@@ -6,20 +6,10 @@ import { createLogger } from '../factories/logger-factory'
 import { DatabaseClient } from '../@types/base'
 import { IInvoiceRepository } from '../@types/repositories'
 import { randomUUID } from 'crypto'
-import { isSqliteClient } from '../database/dialect'
+import { detectStorageDialect } from '../database/dialects'
+import { Knex } from 'knex'
 
 const logger = createLogger('invoice-repository')
-
-/**
- * Balance credit per paid unit, mirroring the Postgres confirm_invoice()
- * function (migrations/20230217_235600_scale_balance_addition_with_unit.js):
- * msats are credited as-is, sats are scaled to msats, btc to msats.
- */
-const BALANCE_UNIT_MULTIPLIERS: Record<string, bigint> = {
-  msats: 1n,
-  sats: 1000n,
-  btc: 100000000n * 1000n,
-}
 
 export class InvoiceRepository implements IInvoiceRepository {
   public constructor(private readonly dbClient: DatabaseClient) {}
@@ -33,34 +23,7 @@ export class InvoiceRepository implements IInvoiceRepository {
     logger('confirming invoice %s at %s: %s', invoiceId, confirmedAt, amountPaid)
 
     try {
-      if (isSqliteClient(client)) {
-        // Port of the Postgres confirm_invoice() function (see
-        // migrations/20230220_002700_fix_unit_confirm_invoice_func.js):
-        // only a not-yet-confirmed invoice confirms and credits the payee.
-        await client.transaction(async (trx) => {
-          const invoice = await trx('invoices')
-            .where('id', invoiceId)
-            .first('pubkey', 'confirmed_at', 'unit')
-
-          if (!invoice || invoice.confirmed_at !== null) {
-            return
-          }
-
-          await trx('invoices').where('id', invoiceId).update({
-            confirmed_at: confirmedAt,
-            amount_paid: amountPaid.toString(),
-            updated_at: new Date(),
-          })
-
-          const multiplier = BALANCE_UNIT_MULTIPLIERS[invoice.unit] ?? 1n
-          await trx('users')
-            .where('pubkey', invoice.pubkey)
-            .update({ balance: trx.raw('balance + ?', [(amountPaid * multiplier).toString()]) })
-        })
-        return
-      }
-
-      await client.raw('select confirm_invoice(?, ?, ?)', [invoiceId, amountPaid.toString(), confirmedAt.toISOString()])
+      await detectStorageDialect(client as Knex).confirmInvoice(client, invoiceId, amountPaid, confirmedAt)
     } catch (error) {
       logger.error('Unable to confirm invoice. Reason:', error)
 

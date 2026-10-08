@@ -9,7 +9,8 @@ import {
 } from '../@types/notification-outbox'
 import { INotificationOutboxRepository } from '../@types/repositories'
 import { createLogger } from '../factories/logger-factory'
-import { isSqliteClient } from '../database/dialect'
+import { detectStorageDialect } from '../database/dialects'
+import { Knex } from 'knex'
 
 const logger = createLogger('notification-outbox-repository')
 
@@ -87,12 +88,10 @@ export class NotificationOutboxRepository implements INotificationOutboxReposito
         .orderBy('created_at', 'asc')
         .limit(limit)
 
-      if (!isSqliteClient(client)) {
-        // SQLite serializes writers already; FOR UPDATE/SKIP LOCKED don't exist there.
-        claimQuery.forUpdate().skipLocked()
-      }
-
-      const rows = await claimQuery.select('*')
+      // FOR UPDATE SKIP LOCKED where supported; a no-op on serialized backends.
+      const rows = await detectStorageDialect(client as Knex)
+        .applyClaimLock(claimQuery)
+        .select('*')
 
       if (!rows.length) {
         return []
