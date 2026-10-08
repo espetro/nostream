@@ -25,6 +25,8 @@ Event input is a file path, inline JSON, or `-` for stdin; `--filter` is
 repeatable and accepts the same forms. Exit code is `0` when every check
 passes, `1` when a check fails, `2` on usage/input errors. `--skip-sig`
 skips signature verification entirely (e.g. for hashing-only pipelines).
+`--batch` reads stdin as JSONL (one event per line) and prints one report
+line per event — the mode used by the benchmark below.
 
 ## Build
 
@@ -86,6 +88,35 @@ rejects; the shim rewrites it to `x86_64-linux-gnu`). Artifacts land in
 - **Not compiled here:** `toNostrEvent` (`DBEvent` Buffer/Date row shapes),
   `broadcastEvent`/`getRelayPrivateKey` (`cluster` default import, SC1012;
   `process.send` has no lowering), signing helpers.
+
+## Benchmark: scriptc binary vs Node
+
+`bash native/bench/run.sh` builds the binary plus a tsc-compiled Node
+baseline from the same `native/src` sources, generates a signed corpus
+(2000 events), and measures three modes: `native` (this binary), `node`
+(`node dist-node/cli.js` — zero-dep JS), `tsnode` (dev-loop baseline).
+
+Results (2000 events, full id-hash + BIP-340 sig + 2 filters per event):
+
+| mode | spawn+validate p50 | batch ev/s | batch peak RSS | artifact |
+|---|---|---|---|---|
+| native | 56 ms | 18 | 3.3 MiB | 473 KiB static ELF, zero deps |
+| node | 33 ms | 216 | 66 MiB | 24 KiB JS + ~120 MiB node runtime |
+| tsnode | 254 ms | 404 | 135 MiB | sources + node_modules |
+
+Reading it honestly — scriptc wins where it should and loses where it matters:
+
+- **Startup:** pure spawn cost (`--skip-sig`) is ~5 ms native vs ~20 ms
+  node vs ~220 ms ts-node — the binary is 4-40× faster to first output and
+  20-40× lighter on RSS.
+- **Compute:** the vendored pure-BigInt BIP-340 verify runs ~54 ms/event
+  compiled by scriptc vs ~4.6 ms under V8 (~12× slower). Signature
+  verification dominates: `--skip-sig` drops native to ~72 µs/event
+  (JSON+SHA-256+filter) vs ~32 µs on node — only ~2× apart.
+- Verdict: for anything BigInt/crypto-heavy, scriptc's codegen is not
+  competitive with V8 yet; for spawn-per-invocation tooling, hashing-only
+  pipelines, or zero-runtime footprint, the 473 KiB static binary is the
+  practical win. Batch corpus + harness live in `native/bench/`.
 
 ## Verified outputs
 
