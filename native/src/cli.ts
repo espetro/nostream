@@ -18,13 +18,16 @@ Arguments:
   <event.json|->        Path to an event JSON file, or '-' to read stdin.
 
 Options:
+  --batch               Read stdin as JSONL (one event per line) and print one
+                        report line per event. The event argument is ignored;
+                        '-' must still be given. Filters apply to every event.
   --filter <f.json|->   A NIP-01 subscription filter as inline JSON, or a path
                         to a filter JSON file, or '-' to read stdin. Repeatable.
   --skip-sig            Skip BIP-340 schnorr signature verification (report
                         signature as "skipped" instead of true/false).
   --help                Show this help.
 
-Output: a single JSON object on stdout, e.g.
+Output: a single JSON object on stdout (one per line in --batch mode), e.g.
   {"id_valid":true,"sig_valid":true,"filters":[{"index":0,"match":true}],"valid":true}
 
 Exit codes:
@@ -128,16 +131,87 @@ const print = (report: ValidationReport): void => {
   console.log(JSON.stringify(report))
 }
 
+const validateEvent = (event: Event, filters: SubscriptionFilter[], skipSig: boolean): ValidationReport => {
+  const report: ValidationReport = {
+    id_valid: isEventIdValid(event),
+    sig_valid: 'skipped',
+    filters: [],
+    valid: true,
+  }
+
+  if (!skipSig) {
+    report.sig_valid = isEventSignatureValid(event)
+  }
+
+  for (let index = 0; index < filters.length; index++) {
+    report.filters.push({ index, match: isEventMatchingFilter(filters[index])(event) })
+  }
+
+  report.valid =
+    report.id_valid === true && report.sig_valid !== false && report.filters.every((f) => f.match)
+
+  return report
+}
+
+const errorReport = (error: unknown, sigSkipped: boolean): ValidationReport => ({
+  id_valid: null,
+  sig_valid: sigSkipped ? 'skipped' : null,
+  filters: [],
+  valid: false,
+  error: String(error),
+})
+
+const forEachLine = (text: string, emit: (line: string, index: number) => void): void => {
+  let start = 0
+  let index = 0
+  for (let i = 0; i <= text.length; i++) {
+    if (i === text.length || text.charCodeAt(i) === 10) {
+      const line = text.slice(start, i)
+      if (line.length > 0) {
+        emit(line, index)
+        index++
+      }
+      start = i + 1
+    }
+  }
+}
+
+const runBatch = (filterSources: string[], skipSig: boolean, stdinUsed: { value: boolean }): number => {
+  const filters: SubscriptionFilter[] = []
+  for (const source of filterSources) {
+    filters.push(readJsonSource(source, stdinUsed) as SubscriptionFilter)
+  }
+
+  const text = readFileSync(0, 'utf8')
+  let allValid = true
+  forEachLine(text, (line) => {
+    let report: ValidationReport
+    try {
+      report = validateEvent(toEvent(JSON.parse(line)), filters, skipSig)
+    } catch (error) {
+      report = errorReport(error, skipSig)
+    }
+    if (!report.valid) {
+      allValid = false
+    }
+    print(report)
+  })
+  return allValid ? 0 : 1
+}
+
 const run = async (argv: string[]): Promise<number> => {
   let eventSource: string | undefined
   const filterSources: string[] = []
   let skipSig = false
+  let batch = false
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     if (arg === '--help' || arg === '-h') {
       console.log(USAGE)
       return 0
+    } else if (arg === '--batch') {
+      batch = true
     } else if (arg === '--skip-sig' || arg === '--no-verify') {
       skipSig = true
     } else if (arg === '--filter') {
@@ -161,6 +235,16 @@ const run = async (argv: string[]): Promise<number> => {
   }
 
   const stdinUsed = { value: false }
+
+  if (batch) {
+    try {
+      return runBatch(filterSources, skipSig, stdinUsed)
+    } catch (error) {
+      print(errorReport(error, skipSig))
+      return 2
+    }
+  }
+
   let event: Event
   const filters: SubscriptionFilter[] = []
   try {
@@ -169,28 +253,11 @@ const run = async (argv: string[]): Promise<number> => {
       filters.push(readJsonSource(source, stdinUsed) as SubscriptionFilter)
     }
   } catch (error) {
-    print({ id_valid: null, sig_valid: skipSig ? 'skipped' : null, filters: [], valid: false, error: String(error) })
+    print(errorReport(error, skipSig))
     return 2
   }
 
-  const report: ValidationReport = {
-    id_valid: isEventIdValid(event),
-    sig_valid: 'skipped',
-    filters: [],
-    valid: true,
-  }
-
-  if (!skipSig) {
-    report.sig_valid = isEventSignatureValid(event)
-  }
-
-  filterSources.forEach((_, index) => {
-    report.filters.push({ index, match: isEventMatchingFilter(filters[index])(event) })
-  })
-
-  report.valid =
-    report.id_valid === true && report.sig_valid !== false && report.filters.every((f) => f.match)
-
+  const report = validateEvent(event, filters, skipSig)
   print(report)
   return report.valid ? 0 : 1
 }
