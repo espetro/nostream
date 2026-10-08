@@ -52,3 +52,11 @@ docker-compose.overrides.yml
 
 # Code coverage report output
 coverage-report/
+
+# scriptc native builds
+.scriptc-toolchain/
+.scriptc/
+native/dist/
+
+# benchmark artifacts
+native/bench/out/

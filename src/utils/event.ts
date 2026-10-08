@@ -263,12 +263,12 @@ export const isExpiredEvent = (event: Event): boolean => {
 const MAX_EXPIRATION_TIME = 2147483647
 
 export const getEventExpiration = (event: Event): number | undefined => {
-  const [, rawExpirationTime] = event.tags.find((tag) => tag.length >= 2 && tag[0] === EventTags.Expiration) ?? []
-  if (!rawExpirationTime) {
+  const expirationTag = event.tags.find((tag) => tag.length >= 2 && tag[0] === EventTags.Expiration)
+  if (!expirationTag) {
     return
   }
 
-  const expirationTime = Number(rawExpirationTime)
+  const expirationTime = Number(expirationTag[1])
 
   if (Number.isSafeInteger(expirationTime) && expirationTime > 0 && expirationTime <= MAX_EXPIRATION_TIME) {
     return expirationTime
