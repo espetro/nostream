@@ -1,13 +1,13 @@
 // Vendored BIP-340 schnorr signature verification (secp256k1, even-y public
-// keys), pure BigInt arithmetic over our own sha256.
+// keys): pure BigInt arithmetic over our own sha256, Jacobian coordinates
+// (one modular inversion per verification, not one per point op).
 //
-// Why this exists: @noble/secp256k1@1.7.1's schnorr.verify is async, and
-// Promise<boolean> results fail scriptc 0.2.5's quickjs island marshalling
-// ("expected boolean, got object" — verified). schnorr.verifySync would work
-// but requires injecting utils.sha256Sync, and passing a function with
-// Uint8Array parameters across the island boundary is rejected at compile
-// time (SC1090). This implementation takes and returns only strings/booleans,
-// so it is boundary-safe whether it compiles statically or runs in the island.
+// Why this exists: the compiled unit deliberately avoids @noble/secp256k1 so
+// the binary stays 100% static — noble's async schnorr.verify fails scriptc's
+// quickjs island marshalling ("expected boolean, got object" — verified) and
+// verifySync can't be fed a Uint8Array-typed sha256Sync across the boundary
+// (SC1090). All inputs/outputs are strings/booleans, so the module is fully
+// statically compiled with zero island traffic.
 
 import { concatBytes, sha256 } from './sha256'
 
@@ -23,10 +23,19 @@ interface AffinePoint {
   y: bigint
 }
 
+// Jacobian (X, Y, Z) represents affine (X/Z^2, Y/Z^3); Z = 0 is infinity.
+interface JacobianPoint {
+  x: bigint
+  y: bigint
+  z: bigint
+}
+
 const G: AffinePoint = {
   x: BigInt('0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'),
   y: BigInt('0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8'),
 }
+
+const JACOBIAN_INF: JacobianPoint = { x: ZERO, y: ONE, z: ZERO }
 
 const mod = (a: bigint, m: bigint): bigint => {
   const r = a % m
@@ -49,47 +58,79 @@ const powMod = (base: bigint, exp: bigint, m: bigint): bigint => {
 
 const invert = (x: bigint): bigint => powMod(mod(x, CURVE_P), CURVE_P - TWO, CURVE_P)
 
-const pointDouble = (p: AffinePoint): AffinePoint | null => {
-  if (p.y === ZERO) {
-    return null
+const isInf = (p: JacobianPoint): boolean => p.z === ZERO
+
+// Standard a=0 short-Weierstrass Jacobian doubling.
+const jacobianDouble = (p: JacobianPoint): JacobianPoint => {
+  if (p.y === ZERO || isInf(p)) {
+    return JACOBIAN_INF
   }
-  const slope = mod(BigInt(3) * p.x * p.x * invert(mod(TWO * p.y, CURVE_P)), CURVE_P)
-  const x = mod(slope * slope - TWO * p.x, CURVE_P)
-  const y = mod(slope * (p.x - x) - p.y, CURVE_P)
-  return { x, y }
+  const a = mod(p.x * p.x, CURVE_P)
+  const b = mod(p.y * p.y, CURVE_P)
+  const c = mod(b * b, CURVE_P)
+  const d = mod(TWO * mod(mod(p.x + b, CURVE_P) * mod(p.x + b, CURVE_P) - a - c, CURVE_P), CURVE_P)
+  const e = mod(BigInt(3) * a, CURVE_P)
+  const f = mod(e * e, CURVE_P)
+  const x = mod(f - TWO * d, CURVE_P)
+  const y = mod(e * mod(d - x, CURVE_P) - BigInt(8) * c, CURVE_P)
+  const z = mod(TWO * p.y * p.z, CURVE_P)
+  return { x, y, z }
 }
 
-const pointAdd = (p: AffinePoint | null, q: AffinePoint | null): AffinePoint | null => {
-  if (p === null) {
+// General Jacobian + Jacobian addition.
+const jacobianAdd = (p: JacobianPoint, q: JacobianPoint): JacobianPoint => {
+  if (isInf(p)) {
     return q
   }
-  if (q === null) {
+  if (isInf(q)) {
     return p
   }
-  if (p.x === q.x) {
-    if (mod(p.y + q.y, CURVE_P) === ZERO) {
-      return null
+  const z1z1 = mod(p.z * p.z, CURVE_P)
+  const z2z2 = mod(q.z * q.z, CURVE_P)
+  const u1 = mod(p.x * z2z2, CURVE_P)
+  const u2 = mod(q.x * z1z1, CURVE_P)
+  const s1 = mod(p.y * mod(q.z * z2z2, CURVE_P), CURVE_P)
+  const s2 = mod(q.y * mod(p.z * z1z1, CURVE_P), CURVE_P)
+  if (u1 === u2) {
+    if (s1 !== s2) {
+      return JACOBIAN_INF
     }
-    return pointDouble(p)
+    return jacobianDouble(p)
   }
-  const slope = mod((q.y - p.y) * invert(mod(q.x - p.x, CURVE_P)), CURVE_P)
-  const x = mod(slope * slope - p.x - q.x, CURVE_P)
-  const y = mod(slope * (p.x - x) - p.y, CURVE_P)
-  return { x, y }
+  const h = mod(u2 - u1, CURVE_P)
+  const i = mod(mod(TWO * h, CURVE_P) * mod(TWO * h, CURVE_P), CURVE_P)
+  const j = mod(h * i, CURVE_P)
+  const r = mod(TWO * mod(s2 - s1, CURVE_P), CURVE_P)
+  const v = mod(u1 * i, CURVE_P)
+  const x = mod(r * r - j - TWO * v, CURVE_P)
+  const y = mod(r * mod(v - x, CURVE_P) - TWO * s1 * j, CURVE_P)
+  const z = mod((mod(p.z + q.z, CURVE_P) * mod(p.z + q.z, CURVE_P) - z1z1 - z2z2) * h, CURVE_P)
+  return { x, y, z }
 }
 
-const pointMul = (scalar: bigint, p: AffinePoint): AffinePoint | null => {
+const jacobianNeg = (p: JacobianPoint): JacobianPoint => ({ x: p.x, y: mod(-p.y, CURVE_P), z: p.z })
+
+const jacobianMul = (scalar: bigint, p: AffinePoint): JacobianPoint => {
   let n = mod(scalar, CURVE_N)
-  let result: AffinePoint | null = null
-  let addend: AffinePoint | null = p
+  let result = JACOBIAN_INF
+  let addend: JacobianPoint = { x: p.x, y: p.y, z: ONE }
   while (n > ZERO) {
     if (n % TWO === ONE) {
-      result = pointAdd(result, addend)
+      result = jacobianAdd(result, addend)
     }
-    addend = pointAdd(addend, addend)
+    addend = jacobianDouble(addend)
     n = n / TWO
   }
   return result
+}
+
+const toAffine = (p: JacobianPoint): AffinePoint | null => {
+  if (isInf(p)) {
+    return null
+  }
+  const zInv = invert(p.z)
+  const zInv2 = mod(zInv * zInv, CURVE_P)
+  return { x: mod(p.x * zInv2, CURVE_P), y: mod(p.y * mod(zInv2 * zInv, CURVE_P), CURVE_P) }
 }
 
 // secp256k1: y^2 = x^3 + 7; P % 4 == 3, so the square root is ySq^((P+1)/4).
@@ -156,13 +197,14 @@ export const schnorrVerify = (sigHex: string, messageHex: string, pubkeyHex: str
 
   const e = mod(bytesToBigint(taggedHash('BIP0340/challenge', [sig.slice(0, 32), pub, msg])), CURVE_N)
 
-  const sG = pointMul(s, G)
-  const eP = pointMul(e, p)
-  const negEP: AffinePoint | null = eP === null ? null : { x: eP.x, y: mod(-eP.y, CURVE_P) }
-  const sum = pointAdd(sG, negEP)
-  if (sum === null) {
+  // R = s*G - e*P
+  const sG = jacobianMul(s, G)
+  const eP = jacobianMul(e, p)
+  const sum = jacobianAdd(sG, jacobianNeg(eP))
+  const sumAffine = toAffine(sum)
+  if (sumAffine === null) {
     return false
   }
 
-  return sum.x === r && sum.y % TWO === ZERO
+  return sumAffine.x === r && sumAffine.y % TWO === ZERO
 }

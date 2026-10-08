@@ -1,0 +1,18 @@
+{
+  "pubkey": "d452a6dc460b7118aefb81d2cd7827bffa33a2afae18c742464fdb7f1403bab4",
+  "created_at": 1700000000,
+  "kind": 1,
+  "tags": [
+    [
+      "t",
+      "nostr"
+    ],
+    [
+      "g",
+      "u4pruydqqvj"
+    ]
+  ],
+  "content": "tampered",
+  "id": "dd713668c9baec5216a751371b28a18b9d862fa0eb619ddf03de71209f21bb23",
+  "sig": "31509dfe49a7e373bb6870251299a309567533e7322d37eebc0eeddc8b11360be352c3d9ca5be682ef06376abc8ac444c833ce0bd286c807ffc3fd3a5e0e0675"
+}

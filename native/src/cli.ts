@@ -174,14 +174,14 @@ const run = async (argv: string[]): Promise<number> => {
   }
 
   const report: ValidationReport = {
-    id_valid: await isEventIdValid(event),
+    id_valid: isEventIdValid(event),
     sig_valid: 'skipped',
     filters: [],
     valid: true,
   }
 
   if (!skipSig) {
-    report.sig_valid = await isEventSignatureValid(event)
+    report.sig_valid = isEventSignatureValid(event)
   }
 
   filterSources.forEach((_, index) => {

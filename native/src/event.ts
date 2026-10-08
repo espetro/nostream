@@ -4,9 +4,9 @@
 // intentionally left out — they pull in Buffer/Date row shapes, `cluster` and
 // `process.send`, none of which scriptc can lower (see native/README.md).
 
-import * as secp256k1 from '@noble/secp256k1'
 import type { Event, SubscriptionFilter, Tag, UnidentifiedEvent } from './types'
 import { isGenericTagQuery, isGeohashPrefixCriterion, stripGeohashPrefixWildcard } from './filter'
+import { sha256 } from './sha256'
 import { schnorrVerify } from './schnorr'
 
 export const serializeEvent = (event: UnidentifiedEvent): (number | string | Tag[])[] => [
@@ -18,21 +18,22 @@ export const serializeEvent = (event: UnidentifiedEvent): (number | string | Tag
   event.content,
 ]
 
-export const getEventHash = async (event: UnidentifiedEvent): Promise<string> => {
-  const id = await secp256k1.utils.sha256(Buffer.from(JSON.stringify(serializeEvent(event))))
+export const getEventHash = (event: UnidentifiedEvent): string => {
+  const id = sha256(Buffer.from(JSON.stringify(serializeEvent(event))))
 
   return Buffer.from(id).toString('hex')
 }
 
-export const isEventIdValid = async (event: Event): Promise<boolean> => {
-  return event.id === (await getEventHash(event))
+export const isEventIdValid = (event: Event): boolean => {
+  return event.id === getEventHash(event)
 }
 
-// @noble/secp256k1@1.7.1's schnorr.verify is async and its Promise fails the
-// scriptc island marshalling ("expected boolean, got object" — verified), and
+// Signature verification uses the vendored pure-BigInt BIP-340 check —
+// @noble/secp256k1 is deliberately not imported anywhere in this unit, so the
+// binary is 100% static (no quickjs island). noble's async schnorr.verify
+// fails island marshalling ("expected boolean, got object" — verified), and
 // verifySync can't be fed a sha256Sync function across the boundary (SC1090).
-// So signature verification uses the vendored pure-BigInt BIP-340 check.
-export const isEventSignatureValid = async (event: Event): Promise<boolean> => {
+export const isEventSignatureValid = (event: Event): boolean => {
   return schnorrVerify(event.sig, event.id, event.pubkey)
 }
 

@@ -51,5 +51,12 @@ EOF
   echo "using zig-cc clang shim at $SHIM_DIR/clang ($ZIG_BIN)" >&2
 fi
 
+# Default: fully static binary (the compiled unit has zero dynamic sites).
+# SCRIPTC_DYNAMIC=1 opts back into the quickjs-island build for comparison.
+DYNAMIC_FLAG=""
+if [ "${SCRIPTC_DYNAMIC:-0}" = "1" ]; then
+  DYNAMIC_FLAG="--dynamic"
+fi
+
 mkdir -p "$(dirname "$OUT")"
-exec scriptc build --dynamic native/src/cli.ts -o "$OUT"
+exec scriptc build $DYNAMIC_FLAG native/src/cli.ts -o "$OUT"

@@ -1,14 +1,15 @@
 # native/ — scriptc-compiled validator
 
 A native binary build of the relay's NIP-01 event validation core, compiled
-with [vercel-labs/scriptc](https://github.com/vercel-labs/scriptc) `0.2.5`
-(`scriptc build --dynamic`). This is a fork-side experiment: it proves the
-portable protocol layer of nostream can ship as a small native executable
-with no Node.js runtime.
+with [vercel-labs/scriptc](https://github.com/vercel-labs/scriptc) `0.2.5`.
+This is a fork-side experiment: it proves the portable protocol layer of
+nostream can ship as a small native executable with no Node.js runtime —
+and no embedded JS engine: the compiled unit is **100% static**
+(`scriptc coverage` reports 306/306 statements, "no dynamic remainder").
 
 ## What ships
 
-`nostream-validate` (~1.8 MB ELF): reads a NIP-01 event as JSON and reports
+`nostream-validate` (~460 KB ELF): reads a NIP-01 event as JSON and reports
 
 - `id_valid` — `id` equals the SHA-256 of the NIP-01 canonical serialization
 - `sig_valid` — `sig` is a valid BIP-340 schnorr signature over `id`/`pubkey`
@@ -31,6 +32,9 @@ skips signature verification entirely (e.g. for hashing-only pipelines).
 $ pnpm run build:native          # or: bash scripts/build-native.sh [out]
 ```
 
+`SCRIPTC_DYNAMIC=1` builds the quickjs-island variant instead (~1.8 MB) —
+useful only for comparison; the static build is the default.
+
 `scripts/build-native.sh` installs `scriptc` if missing and synthesizes a
 `clang` driver on top of `zig cc` when no real clang exists (scriptc emits
 objects via `clang -target x86_64-unknown-linux-gnu …`, a triple `zig cc`
@@ -45,7 +49,9 @@ rejects; the shim rewrites it to `x86_64-linux-gnu`). Artifacts land in
 | `src/event.ts` | ported `serializeEvent`, `getEventHash`, `isEventIdValid`, `isEventSignatureValid`, `isEventMatchingFilter` from `src/utils/event.ts` |
 | `src/filter.ts` | `#x` tag-query + geohash-prefix helpers from `src/utils/filter.ts` |
 | `src/types.ts` | `Event`, `SubscriptionFilter`, `Tag`, … — relaxed copies of `src/@types` |
-| `src/schnorr.ts` | vendored BIP-340 verify (pure BigInt) + `src/sha256.ts` pure-TS SHA-256 |
+| `src/schnorr.ts` | vendored BIP-340 verify (pure BigInt, Jacobian coordinates) |
+| `src/sha256.ts` | vendored pure-TS SHA-256 (event-id hashing + BIP-340 tagged hash) |
+| `testdata/` | deterministic signed fixture event + tampered/bad-sig/filter variants |
 | `tsconfig.json` | isolated program, `strictNullChecks` (required by scriptc) |
 
 ## Caveats / known limitations (scriptc 0.2.5)
@@ -64,32 +70,35 @@ rejects; the shim rewrites it to `x86_64-linux-gnu`). Artifacts land in
 - **`strictNullChecks` is required** by scriptc but the repo's root tsconfig
   does not enable it (~114 mechanical errors repo-wide — a separate
   upstreamable effort). Only `native/` compiles under strictness here.
-- **schnorr signature verification uses the vendored implementation in
-  `src/schnorr.ts`, not `@noble/secp256k1`.** Verified against noble on
-  valid/tampered/boundary inputs. Two scriptc bugs force this:
+- **No `@noble/secp256k1` at all — all cryptography is vendored**
+  (`src/sha256.ts` pure-TS SHA-256, `src/schnorr.ts` pure-BigInt BIP-340
+  verify with Jacobian point math), verified against noble on
+  valid/tampered/boundary inputs (104/104 agreement). Two scriptc bugs
+  force this:
   - noble's `schnorr.verify` is async; `Promise<boolean>` crossing the
     quickjs-ng island boundary fails marshalling (`TypeError: expected
     boolean, got object`), so the call always errors.
   - `schnorr.verifySync` would work but requires assigning a
     `utils.sha256Sync` implementation; passing a function with `Uint8Array`
     parameters across the island boundary is rejected at compile time (SC1090).
-- **Only `@noble/secp256k1.utils.sha256` runs in the island** (2 dynamic
-  sites; `scriptc coverage` reports 99% static). Everything else — event-id
-  hashing via Buffer+island sha256, filter matching, the full schnorr path —
-  is statically compiled.
+  Vendoring also removed the last 2 island sites (noble's async
+  `utils.sha256`), which is what makes the binary fully static.
 - **Not compiled here:** `toNostrEvent` (`DBEvent` Buffer/Date row shapes),
   `broadcastEvent`/`getRelayPrivateKey` (`cluster` default import, SC1012;
   `process.send` has no lowering), signing helpers.
 
 ## Verified outputs
 
-Built on Linux x86-64 (Node 24, scriptc 0.2.5, zig-cc shim):
+Built on Linux x86-64 (Node 24, scriptc 0.2.5, zig-cc shim). Fixtures in
+`native/testdata/` are deterministic (fixed private key). A full
+validation (id hash + schnorr verify) takes ~70 ms; ~4 ms with
+`--skip-sig`.
 
 ```
-$ ./native/dist/nostream-validate /tmp/event.json
+$ ./native/dist/nostream-validate native/testdata/event.json
 {"id_valid":true,"sig_valid":true,"filters":[],"valid":true}          # exit 0
-$ ./native/dist/nostream-validate /tmp/event-tampered.json
+$ ./native/dist/nostream-validate native/testdata/event-tampered.json
 {"id_valid":false,"sig_valid":true,"filters":[],"valid":false}        # exit 1
-$ ./native/dist/nostream-validate /tmp/event.json --filter /tmp/f.json
+$ ./native/dist/nostream-validate native/testdata/event.json --filter native/testdata/filter-nomatch.json
 {"id_valid":true,"sig_valid":true,"filters":[{"index":0,"match":false}],"valid":false}  # exit 1
 ```
