@@ -57,3 +57,6 @@ coverage-report/
 .scriptc-toolchain/
 .scriptc/
 native/dist/
+
+# benchmark artifacts
+native/bench/out/
