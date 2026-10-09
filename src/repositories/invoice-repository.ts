@@ -6,6 +6,8 @@ import { createLogger } from '../factories/logger-factory'
 import { DatabaseClient } from '../@types/base'
 import { IInvoiceRepository } from '../@types/repositories'
 import { randomUUID } from 'crypto'
+import { detectStorageDialect } from '../database/dialects'
+import { Knex } from 'knex'
 
 const logger = createLogger('invoice-repository')
 
@@ -21,7 +23,7 @@ export class InvoiceRepository implements IInvoiceRepository {
     logger('confirming invoice %s at %s: %s', invoiceId, confirmedAt, amountPaid)
 
     try {
-      await client.raw('select confirm_invoice(?, ?, ?)', [invoiceId, amountPaid.toString(), confirmedAt.toISOString()])
+      await detectStorageDialect(client as Knex).confirmInvoice(client, invoiceId, amountPaid, confirmedAt)
     } catch (error) {
       logger.error('Unable to confirm invoice. Reason:', error)
 

@@ -1,7 +1,8 @@
 import 'pg'
 import 'pg-query-stream'
-import knex, { Knex } from 'knex'
+import knex from 'knex'
 import { createLogger } from '../factories/logger-factory'
+import { resolveStorageDialect } from './dialects'
 
 const poolLogger = createLogger('database-client:pool-monitor')
 
@@ -24,66 +25,12 @@ const poolLogger = createLogger('database-client:pool-monitor')
   }
 })(knex)
 
-const getMasterConfig = (): Knex.Config =>
-  ({
-    tag: 'master',
-    client: 'pg',
-    connection: process.env.DB_URI
-      ? process.env.DB_URI
-      : {
-          host: process.env.DB_HOST,
-          port: Number(process.env.DB_PORT),
-          user: process.env.DB_USER,
-          password: process.env.DB_PASSWORD,
-          database: process.env.DB_NAME,
-        },
-    pool: {
-      min: process.env.DB_MIN_POOL_SIZE ? Number(process.env.DB_MIN_POOL_SIZE) : 0,
-      max: process.env.DB_MAX_POOL_SIZE ? Number(process.env.DB_MAX_POOL_SIZE) : 3,
-      idleTimeoutMillis: 60000,
-      propagateCreateError: false,
-      acquireTimeoutMillis: process.env.DB_ACQUIRE_CONNECTION_TIMEOUT
-        ? Number(process.env.DB_ACQUIRE_CONNECTION_TIMEOUT)
-        : 60000,
-    },
-    acquireConnectionTimeout: process.env.DB_ACQUIRE_CONNECTION_TIMEOUT
-      ? Number(process.env.DB_ACQUIRE_CONNECTION_TIMEOUT)
-      : 60000,
-  }) as any
-
-const getReadReplicaConfigByIndex = (index: number): Knex.Config =>
-  ({
-    tag: 'read-replica',
-    client: 'pg',
-    connection: {
-      host: process.env[`RR${index}_DB_HOST`],
-      port: Number(process.env[`RR${index}_DB_PORT`]),
-      user: process.env[`RR${index}_DB_USER`],
-      password: process.env[`RR${index}_DB_PASSWORD`],
-      database: process.env[`RR${index}_DB_NAME`],
-    },
-    pool: {
-      min: process.env[`RR${index}_DB_MIN_POOL_SIZE`] ? Number(process.env[`RR${index}_DB_MIN_POOL_SIZE`]) : 0,
-      max: process.env[`RR${index}_DB_MAX_POOL_SIZE`] ? Number(process.env[`RR${index}_DB_MAX_POOL_SIZE`]) : 3,
-      idleTimeoutMillis: 60000,
-      propagateCreateError: false,
-      acquireTimeoutMillis: process.env[`RR${index}_DB_ACQUIRE_CONNECTION_TIMEOUT`]
-        ? Number(process.env[`RR${index}_DB_ACQUIRE_CONNECTION_TIMEOUT`])
-        : 60000,
-    },
-  }) as any
-
-const getReadReplicaConfig = (): Knex.Config => {
-  const readReplicaIndex = Number(process.env.WORKER_INDEX) % Number(process.env.READ_REPLICAS)
-  return getReadReplicaConfigByIndex(readReplicaIndex)
-}
-
-let writeClient: Knex
+let writeClient: ReturnType<typeof knex>
 
 export const getMasterDbClient = () => {
   const logger = createLogger('database-client:get-db-client')
   if (!writeClient) {
-    const config = getMasterConfig()
+    const config = resolveStorageDialect().masterConfig()
     logger('config: %o', config)
     writeClient = knex(config)
   }
@@ -91,18 +38,19 @@ export const getMasterDbClient = () => {
   return writeClient
 }
 
-let readClient: Knex
+let readClient: ReturnType<typeof knex>
 
 export const getReadReplicaDbClient = () => {
-  if (process.env.READ_REPLICA_ENABLED !== 'true') {
+  // Backends without replicas (e.g. SQLite) share the master connection.
+  const readReplicaConfig = resolveStorageDialect().readReplicaConfig()
+  if (!readReplicaConfig || process.env.READ_REPLICA_ENABLED !== 'true') {
     return getMasterDbClient()
   }
 
   const logger = createLogger('database-client:get-read-replica-db-client')
   if (!readClient) {
-    const config = getReadReplicaConfig()
-    logger('config: %o', config)
-    readClient = knex(config)
+    logger('config: %o', readReplicaConfig)
+    readClient = knex(readReplicaConfig)
   }
 
   return readClient

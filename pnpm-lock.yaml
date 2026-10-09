@@ -35,6 +35,9 @@ importers:
       axios:
         specifier: ^1.18.0
         version: 1.18.0
+      better-sqlite3:
+        specifier: ^13.0.3
+        version: 13.0.3
       cac:
         specifier: ^7.0.0
         version: 7.0.0
@@ -49,7 +52,7 @@ importers:
         version: 4.2.0
       knex:
         specifier: 2.4.2
-        version: 2.4.2(pg@8.9.0)
+        version: 2.4.2(better-sqlite3@13.0.3)(pg@8.9.0)
       ora:
         specifier: ^9.3.0
         version: 9.4.0
@@ -99,6 +102,9 @@ importers:
       '@cucumber/pretty-formatter':
         specifier: 1.0.0
         version: 1.0.0(@cucumber/cucumber@10.2.1)(@cucumber/messages@24.0.1)
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
       '@types/chai':
         specifier: ^4.3.1
         version: 4.3.20
@@ -818,6 +824,9 @@ packages:
   '@tsconfig/node16@1.0.4':
     resolution: {integrity: sha512-vxhUy4J8lyeyinH7Azl1pdd43GJhZH/tP2weN8TntQblOY+A0XbT8DJk1/oCPuOOyg/Ja757rG0CgHcWC8OfMA==}
 
+  '@types/better-sqlite3@9.6.0':
+    resolution: {integrity: sha512-ZEEwBSgMu7GYJOynoagg5X9JbxfL6dTJDsgViJIqh67jV44kyOr9RXfmFjLK5rzC4MWssP06t9hu/JwGDnUbCg==}
+
   '@types/body-parser@1.19.6':
     resolution: {integrity: sha512-HLFeCYgz89uk22N5Qg3dvGvsv46B8GLvKKo1zKG4NybA8U2DiEO3w9lqGg29t/tfLRJpJ6iQxnVw4OnB7MoM9g==}
 
@@ -1051,6 +1060,10 @@ packages:
   better-path-resolve@1.0.0:
     resolution: {integrity: sha512-pbnl5XzGBdrFU/wT4jqmJVPn2B6UHPBOhzMQkY/SPUPB6QtUXtmBHBIwCbXJol93mOpGMnQyP/+BB19q04xj7g==}
     engines: {node: '>=4'}
+
+  better-sqlite3@13.0.3:
+    resolution: {integrity: sha512-RbOBxmLBG8uvFUc15X9+9SFemKcQ0WBuISBVkpuiaUB2qblC8UWlHEjdWVoZ8AdhSwmoEgsiXKfopX0CQxaACQ==}
+    engines: {node: '>=22'}
 
   binary-extensions@2.3.0:
     resolution: {integrity: sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw==}
@@ -2366,6 +2379,10 @@ packages:
 
   node-addon-api@3.2.1:
     resolution: {integrity: sha512-mmcei9JghVNDYydghQmeDX8KoAm0FAiYyIcUt/N4nhyAipB17pllZQDOJD2fotxABnt4Mdz+dKTO7eftLg4d0A==}
+
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
+    engines: {node: ^18 || ^20 || >= 21}
 
   node-fetch@2.7.0:
     resolution: {integrity: sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==}
@@ -4412,6 +4429,10 @@ snapshots:
 
   '@tsconfig/node16@1.0.4': {}
 
+  '@types/better-sqlite3@9.6.0':
+    dependencies:
+      '@types/node': 24.12.2
+
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
@@ -4635,6 +4656,10 @@ snapshots:
   better-path-resolve@1.0.0:
     dependencies:
       is-windows: 1.0.2
+
+  better-sqlite3@13.0.3:
+    dependencies:
+      node-addon-api: 8.9.2
 
   binary-extensions@2.3.0: {}
 
@@ -5599,7 +5624,7 @@ snapshots:
 
   kind-of@6.0.3: {}
 
-  knex@2.4.2(pg@8.9.0):
+  knex@2.4.2(better-sqlite3@13.0.3)(pg@8.9.0):
     dependencies:
       colorette: 2.0.19
       commander: 9.5.0
@@ -5616,6 +5641,7 @@ snapshots:
       tarn: 3.0.2
       tildify: 2.0.0
     optionalDependencies:
+      better-sqlite3: 13.0.3
       pg: 8.9.0
     transitivePeerDependencies:
       - supports-color
@@ -5935,6 +5961,8 @@ snapshots:
 
   node-addon-api@3.2.1:
     optional: true
+
+  node-addon-api@8.9.2: {}
 
   node-fetch@2.7.0:
     dependencies:

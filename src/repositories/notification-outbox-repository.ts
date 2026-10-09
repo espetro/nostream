@@ -9,6 +9,8 @@ import {
 } from '../@types/notification-outbox'
 import { INotificationOutboxRepository } from '../@types/repositories'
 import { createLogger } from '../factories/logger-factory'
+import { detectStorageDialect } from '../database/dialects'
+import { Knex } from 'knex'
 
 const logger = createLogger('notification-outbox-repository')
 
@@ -69,7 +71,7 @@ export class NotificationOutboxRepository implements INotificationOutboxReposito
       const now = new Date()
       const staleBefore = new Date(now.getTime() - NOTIFICATION_OUTBOX_PROCESSING_LEASE_MS)
 
-      const rows = await trx<DBNotificationOutboxMessage>('notification_outbox')
+      const claimQuery = trx<DBNotificationOutboxMessage>('notification_outbox')
         .where((builder) => {
           builder
             .where((pending) => {
@@ -85,8 +87,10 @@ export class NotificationOutboxRepository implements INotificationOutboxReposito
         })
         .orderBy('created_at', 'asc')
         .limit(limit)
-        .forUpdate()
-        .skipLocked()
+
+      // FOR UPDATE SKIP LOCKED where supported; a no-op on serialized backends.
+      const rows = await detectStorageDialect(client as Knex)
+        .applyClaimLock(claimQuery)
         .select('*')
 
       if (!rows.length) {

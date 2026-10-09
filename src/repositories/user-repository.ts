@@ -4,6 +4,8 @@ import { DBUser, User } from '../@types/user'
 import { fromDBUser, toBuffer } from '../utils/transform'
 import { IEventRepository, IUserRepository } from '../@types/repositories'
 import { createLogger } from '../factories/logger-factory'
+import { detectStorageDialect } from '../database/dialects'
+import { Knex } from 'knex'
 
 const logger = createLogger('user-repository')
 
@@ -132,7 +134,7 @@ export class UserRepository implements IUserRepository {
     logger('admit user: %s at %s', pubkey, admittedAt)
 
     try {
-      await client.raw('select admit_user(?, ?)', [toBuffer(pubkey), admittedAt.toISOString()])
+      await detectStorageDialect(client as Knex).admitUser(client, pubkey, admittedAt)
     } catch (error) {
       logger.error('Unable to admit user. Reason:', error)
 

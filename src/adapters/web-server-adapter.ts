@@ -1,4 +1,5 @@
-import { Duplex, EventEmitter } from 'stream'
+import { Duplex } from 'stream'
+import { EventEmitter } from 'node:events'
 import { Server } from 'http'
 
 import { createLogger } from '../factories/logger-factory'

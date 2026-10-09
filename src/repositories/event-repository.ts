@@ -21,6 +21,7 @@ import {
   EventExpirationTimeMetadataKey,
   EventKinds,
 } from '../constants/base'
+import { Knex } from 'knex'
 import { DatabaseClient, EventId } from '../@types/base'
 import { DBEvent, Event } from '../@types/event'
 import { EventPurgeCounts, EventRetentionOptions, IEventRepository, IQueryResult } from '../@types/repositories'
@@ -28,6 +29,7 @@ import { toBuffer, toJSON } from '../utils/transform'
 import { createLogger } from '../factories/logger-factory'
 import { isGenericTagQuery, isGeohashPrefixCriterion, stripGeohashPrefixWildcard } from '../utils/filter'
 import { SubscriptionFilter } from '../@types/subscription'
+import { detectStorageDialect, StorageDialect } from '../database/dialects'
 
 const logger = createLogger('event-repository')
 const RETENTION_BATCH_SIZE = 1000
@@ -35,8 +37,7 @@ const SECONDS_PER_DAY = 86400
 
 type HexCriterionGroups = {
   exact: string[]
-  even: string[]
-  odd: string[]
+  prefixes: string[]
 }
 
 /** Default text-search configuration when nip50.language is unset. */
@@ -47,6 +48,8 @@ const DEFAULT_MAX_SEARCH_QUERY_LENGTH = 256
 interface FilterConditionFlags {
   isSearchQuery: boolean
 }
+
+
 
 export class EventRepository implements IEventRepository {
   public constructor(
@@ -68,15 +71,16 @@ export class EventRepository implements IEventRepository {
       isSearchQueries.push(isSearchQuery)
 
       if (isSearchQuery) {
-        const tsConfig = this.getNip50Language()
         const nip50Settings = this.settings?.()
         const maxLen = nip50Settings?.nip50?.maxQueryLength ?? DEFAULT_MAX_SEARCH_QUERY_LENGTH
         const searchQuery = currentFilter.search.trim().slice(0, maxLen)
-        const searchSelection = this.readReplicaDbClient.raw(
-          'events.*, ts_rank(to_tsvector(?::regconfig, event_content), plainto_tsquery(?::regconfig, ?)) AS search_rank',
-          [tsConfig, tsConfig, searchQuery],
+        builder.select(
+          this.dialect().searchSelection(
+            this.readReplicaDbClient as Knex,
+            searchQuery,
+            this.getNip50Language(),
+          ),
         )
-        builder.select(searchSelection)
       }
 
       builder.limit(typeof currentFilter.limit === 'number' ? currentFilter.limit : DEFAULT_FILTER_LIMIT)
@@ -166,13 +170,9 @@ export class EventRepository implements IEventRepository {
     if (typeof currentFilter.search === 'string' && currentFilter.search.trim().length > 0) {
       const nip50Settings = this.settings?.()
       if (nip50Settings?.nip50?.enabled) {
-        const tsConfig = this.getNip50Language()
         const maxLen = nip50Settings.nip50.maxQueryLength ?? DEFAULT_MAX_SEARCH_QUERY_LENGTH
         const searchQuery = currentFilter.search.trim().slice(0, maxLen)
-        builder.andWhereRaw(
-          'to_tsvector(?::regconfig, event_content) @@ plainto_tsquery(?::regconfig, ?)',
-          [tsConfig, tsConfig, searchQuery],
-        )
+        this.dialect().applySearchFilter(builder, searchQuery, this.getNip50Language())
         isSearchQuery = true
       }
     }
@@ -233,22 +233,15 @@ export class EventRepository implements IEventRepository {
     }
 
     const groups = this.groupHexCriteria(criteria)
+    const dialect = this.dialect()
 
     tableFields.forEach((tableField) => {
       if (groups.exact.length) {
         builder.orWhereIn(tableField, groups.exact.map(toBuffer))
       }
 
-      groups.even.forEach((prefix) => {
-        builder.orWhereRaw(`substring("${tableField}" from 1 for ?) = ?`, [prefix.length >> 1, toBuffer(prefix)])
-      })
-
-      groups.odd.forEach((prefix) => {
-        builder.orWhereRaw(`substring("${tableField}" from 1 for ?) BETWEEN ? AND ?`, [
-          (prefix.length >> 1) + 1,
-          `\\x${prefix}0`,
-          `\\x${prefix}f`,
-        ])
+      groups.prefixes.forEach((prefix) => {
+        dialect.applyHexPrefix(builder, tableField, prefix)
       })
     })
   }
@@ -258,18 +251,15 @@ export class EventRepository implements IEventRepository {
       (groups, criterion) => {
         if (criterion.length === 64) {
           groups.exact.push(criterion)
-        } else if (criterion.length % 2 === 0) {
-          groups.even.push(criterion)
         } else {
-          groups.odd.push(criterion)
+          groups.prefixes.push(criterion)
         }
 
         return groups
       },
       {
         exact: [],
-        even: [],
-        odd: [],
+        prefixes: [],
       },
     )
   }
@@ -314,7 +304,7 @@ export class EventRepository implements IEventRepository {
   }
 
   public async create(event: Event): Promise<number> {
-    return this.insert(event).then(prop('rowCount') as () => number, () => 0)
+    return this.withRowCount(this.insert(event))
   }
 
   public async createMany(events: Event[]): Promise<number> {
@@ -324,11 +314,12 @@ export class EventRepository implements IEventRepository {
 
     const rows = events.map((event) => this.toInsertRow(event))
 
-    return this.masterDbClient('events')
-      .insert(rows)
-      .onConflict()
-      .ignore()
-      .then(prop('rowCount') as () => number, () => 0)
+    return this.withRowCount(
+      this.masterDbClient('events')
+        .insert(rows)
+        .onConflict()
+        .ignore(),
+    )
   }
 
   private toInsertRow(event: Event) {
@@ -381,13 +372,16 @@ export class EventRepository implements IEventRepository {
         })
       })
 
+    const dialect = this.dialect()
+    const resultQuery = dialect.applyWriteReturning(query)
+
     return {
       then: <T1, T2>(
         onfulfilled: (value: number) => T1 | PromiseLike<T1>,
         onrejected: (reason: any) => T2 | PromiseLike<T2>,
-      ) => query.then(prop('rowCount') as () => number).then(onfulfilled, onrejected),
-      catch: <T>(onrejected: (reason: any) => T | PromiseLike<T>) => query.catch(onrejected),
-      toString: (): string => query.toString(),
+      ) => resultQuery.then(dialect.toRowCount).then(onfulfilled, onrejected),
+      catch: <T>(onrejected: (reason: any) => T | PromiseLike<T>) => resultQuery.catch(onrejected),
+      toString: (): string => resultQuery.toString(),
     } as Promise<number>
   }
 
@@ -398,7 +392,7 @@ export class EventRepository implements IEventRepository {
 
     const rows = events.map((event) => this.toUpsertRow(event))
 
-    return this.masterDbClient('events')
+    const query = this.masterDbClient('events')
       .insert(rows)
       .onConflict(
         this.masterDbClient.raw(
@@ -417,7 +411,8 @@ export class EventRepository implements IEventRepository {
       .whereRaw(
         '("events"."event_created_at" < "excluded"."event_created_at" or ("events"."event_created_at" = "excluded"."event_created_at" and "events"."event_id" > "excluded"."event_id"))',
       )
-      .then(prop('rowCount') as () => number, () => 0)
+
+    return this.withRowCount(query)
   }
 
   private toUpsertRow(event: Event) {
@@ -455,7 +450,7 @@ export class EventRepository implements IEventRepository {
       .whereNot('event_kind', EventKinds.REQUEST_TO_VANISH)
       .whereNull('deleted_at')
       .update({
-        deleted_at: this.masterDbClient.raw('now()'),
+        deleted_at: this.dialect().nowExpression(this.masterDbClient as Knex),
       })
   }
 
@@ -467,7 +462,7 @@ export class EventRepository implements IEventRepository {
       .whereNotIn('event_kind', excludedKinds)
       .whereNull('deleted_at')
       .update({
-        deleted_at: this.masterDbClient.raw('now()'),
+        deleted_at: this.dialect().nowExpression(this.masterDbClient as Knex),
       })
   }
 
@@ -565,6 +560,19 @@ export class EventRepository implements IEventRepository {
         }
       })
     })
+  }
+
+  private dialect(): StorageDialect {
+    return detectStorageDialect(this.masterDbClient as Knex)
+  }
+
+  /**
+   * Normalizes a write query's result to an affected-row count on the
+   * current dialect (e.g. RETURNING rows on SQLite, rowCount on Postgres).
+   */
+  private withRowCount(query: Knex.QueryBuilder): Promise<number> {
+    const dialect = this.dialect()
+    return dialect.applyWriteReturning(query).then(dialect.toRowCount, () => 0)
   }
 
   private mapToPurgeCounts(

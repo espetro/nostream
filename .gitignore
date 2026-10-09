@@ -45,6 +45,9 @@ dist
 # Nostr data folder
 .nostr
 
+# SQLite embedded-mode data files
+data/
+
 # Docker Compose overrides
 docker-compose.overrides.yml
 # Export output
