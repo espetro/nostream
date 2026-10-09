@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:stream'
+import { EventEmitter } from 'node:events'
 import { SubscriptionFilter } from './subscription'
 
 export interface IWebSocketServerAdapter extends EventEmitter, IWebServerAdapter {

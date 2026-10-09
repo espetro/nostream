@@ -3,7 +3,7 @@ import { redisCacheDriver } from './redis'
 import { sqliteCacheDriver } from './sqlite'
 import { CacheDriver } from './types'
 
-export { CacheDriver } from './types'
+export type { CacheDriver } from './types'
 
 /**
  * Cache-driver registry (the cache/fanout counterpart of the storage
