@@ -4,7 +4,7 @@ import { postgresDialect } from './postgres'
 import { sqliteDialect } from './sqlite'
 import { StorageDialect } from './types'
 
-export { StorageDialect } from './types'
+export type { StorageDialect } from './types'
 
 /**
  * Storage-dialect registry (https://github.com/Cameri/nostream/issues/147).

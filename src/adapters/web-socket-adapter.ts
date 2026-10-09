@@ -1,5 +1,5 @@
 import cluster from 'cluster'
-import { EventEmitter } from 'stream'
+import { EventEmitter } from 'node:events'
 import { IncomingMessage as IncomingHttpMessage } from 'http'
 import { WebSocket } from 'ws'
 import { ZodError } from 'zod'
