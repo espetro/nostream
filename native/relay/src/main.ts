@@ -58,7 +58,8 @@ const db =
   dbFile === ':memory:' ? Database.openInMemory() : Database.open(dbFile)
 const store = new SqliteEventStore(db, limits.maxLimit)
 const verifyMode = envStr('RELAY_VERIFY_MODE', 'sync')
-const handler = new RelayHandler(store, limits, skipSig, verifyMode)
+const verifyRate = envNum('RELAY_VERIFY_RATE', 100) / 100
+const handler = new RelayHandler(store, limits, skipSig, verifyMode, verifyRate)
 
 const relayName = envStr('RELAY_NAME', 'nostream-native')
 const relayContact = envStr('RELAY_CONTACT', '')
@@ -110,5 +111,5 @@ log(
     limits.maxSubsPerConn +
     ' maxLimit=' +
     limits.maxLimit +
-    (skipSig ? ' SIG-VERIFY OFF' : ' verify=' + verifyMode),
+    (skipSig ? ' SIG-VERIFY OFF' : ' verify=' + verifyMode + '@' + verifyRate),
 )

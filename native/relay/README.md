@@ -34,13 +34,14 @@ Env vars: `RELAY_PORT` (8008), `RELAY_DB_FILE` (`relay.db`, `:memory:` allowed),
 `RELAY_MAX_SUBS` (16), `RELAY_MAX_FILTERS` (8), `RELAY_DEFAULT_LIMIT` (100),
 `RELAY_MAX_LIMIT` (500), `RELAY_MAX_CONTENT_BYTES` (65536),
 `RELAY_SKIP_SIG_VERIFY` (bench aid — never in production),
-`RELAY_VERIFY_MODE` (`sync` | `optimistic`, default `sync`),
+`RELAY_VERIFY_MODE` (`sync` | `optimistic` | `sample`, default `sync`),
+`RELAY_VERIFY_RATE` (percent 0-100, `sample` mode only, default 100),
 `RELAY_NAME`/`RELAY_CONTACT` (NIP-11 document fields).
 
 ## Signature-verification modes
 
 Sig verify is ~94% of the sync ingest path on this box (9081 ev/s unverified
-ceiling vs ~534 verified), so the relay ships two policies:
+ceiling vs ~534 verified), so the relay ships three policies:
 
 - **`sync` (default)** — verify before store/OK, upstream semantics.
 - **`optimistic`** — store with `verified=0`, `OK` immediately, then a bounded
@@ -49,13 +50,18 @@ ceiling vs ~534 verified), so the relay ships two policies:
   invalid is ever served or broadcast; a failure tombstones the event
   (`verified=-1`), NOTICEs the sender, and quarantines the pubkey (all its
   pending unverified rows are retracted and future events verify inline).
+- **`sample`** — like optimistic but only `RELAY_VERIFY_RATE`% of events
+  queue for verification; the rest store `verified=1` unchecked. **Honest
+  tradeoff:** unsampled invalid signatures can enter the servable set.
+  Throughput scales toward the unverified ceiling as rate→0.
 
-Measured (same corpus/sockets as below):
+Measured (same corpus/sockets as below; diskMb varies with backlog):
 
-| mode        | ev/s | OK p50 ms | note                                  |
-| ----------- | ---: | --------: | ------------------------------------- |
-| sync        |  534 |     236   | default                               |
-| optimistic  | 3908 |      10.3 | safe: verified=1 gate on REQ + fanout |
+| mode            | ev/s | OK p50 ms | note                                        |
+| --------------- | ---: | --------: | ------------------------------------------- |
+| sync            |  534 |     236   | default                                     |
+| optimistic      | 3908 |      10.3 | safe: verified=1 gate on REQ + fanout       |
+| sample @25%     | 7536 |       9.2 | weakens sig guarantee on the unsampled 75%  |
 
 Optimistic still verifies every event — it converts per-event latency into
 throughput by pipelining verify behind the ACK; adversarially it's identical
