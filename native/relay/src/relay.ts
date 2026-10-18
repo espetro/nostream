@@ -66,12 +66,16 @@ class VerifyItem {
 //   'optimistic' — store verified=0 + OK immediately; a bounded queue drains
 //                  after each frame; REQ only serves verified=1 rows; failures
 //                  tombstone the event and quarantine its pubkey.
+//   'sample'     — like optimistic but only RELAY_VERIFY_RATE fraction of
+//                  events queue for verification; unsampled are stored
+//                  verified=1 directly (documented honesty tradeoff).
 export class RelayHandler extends WsHandler {
   _store: SqliteEventStore
   _limits: RelayLimits
   _conns: ConnState[] = []
   _skipSigVerify: boolean
   _verifyMode: string
+  _verifyRate: number
   _verifyQueue: VerifyItem[] = []
   _badPubkeys: string[] = []
 
@@ -80,12 +84,14 @@ export class RelayHandler extends WsHandler {
     limits: RelayLimits,
     skipSigVerify: boolean,
     verifyMode: string,
+    verifyRate: number,
   ) {
     super()
     this._store = store
     this._limits = limits
     this._skipSigVerify = skipSigVerify
     this._verifyMode = verifyMode
+    this._verifyRate = verifyRate
   }
 
   _stateOf(c: WsConn): ConnState | null {
@@ -208,9 +214,16 @@ export class RelayHandler extends WsHandler {
     let verified = 1
     if (this._verifyMode === 'sync' || syncRequired) {
       if (!this._skipSigVerify && !isEventSignatureValid(ev)) {
+        if (this._verifyMode !== 'sync') {
+          this._quarantine(ev.pubkey)
+        }
         c.send(okFrame(ev.id, false, 'invalid: signature verification failed'))
         return
       }
+    } else if (this._verifyMode === 'sample' && Math.random() >= this._verifyRate) {
+      // Unsampled: stored verified directly. Honesty note in README —
+      // unsampled invalid sigs can enter the servable set.
+      verified = 1
     } else {
       verified = 0
     }
