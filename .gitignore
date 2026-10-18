@@ -60,3 +60,9 @@ native/dist/
 
 # benchmark artifacts
 native/bench/out/
+
+# scriptc relay build
+native/relay/.vendor/
+native/relay/dist/
+native/relay/src/shims.d.ts
+native/relay/bench/out/

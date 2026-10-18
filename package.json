@@ -168,7 +168,10 @@
     "node": ">=24.14.1"
   },
   "dependencies": {
+    "@chttp/router": "0.3.0",
+    "@chttp/ws": "0.3.0",
     "@clack/prompts": "^1.2.0",
+    "@cutils/sqlite": "file:native/relay/vendor/cutils-sqlite-0.3.0.tgz",
     "@getalby/sdk": "^5.0.0",
     "@noble/secp256k1": "1.7.1",
     "@opentelemetry/api": "^1.9.1",
