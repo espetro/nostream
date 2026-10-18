@@ -1,0 +1,43 @@
+// Outbound send path for one connection.
+//
+// VENDORED PATCH (nostream): upstream ships WsWriter as a `Writable`
+// subclass; in this repo's type world scriptc 0.3.6 refuses "extending
+// classes not declared in the program" on node:stream's Writable (the same
+// source compiles standalone — likely a repo-local @types/typescript
+// interplay). Upstream's own `_direct` fallback already degrades the
+// writer to direct sink writes when the pump can't be observed, so this
+// patch ships that degraded-but-supported form as the only mode:
+// frames write straight to the socket, the per-window byte cap on
+// WsConn stays the only slow-consumer policy (documented in
+// native/relay/README.md). vendor.mjs splices this in after copying.
+export class WsWriter {
+  _sink: Socket;
+  _ended: boolean = false;
+  _closing: boolean = false;
+  _maxBacklog: number;
+
+  constructor(sink: Socket, maxBacklog: number) {
+    this._sink = sink;
+    this._maxBacklog = maxBacklog;
+    const self: WsWriter = this;
+    this._sink.on("error", () => {
+      self._ended = true;
+    });
+  }
+
+  sendFrame(frame: Buffer): boolean {
+    this._sink.write(frame);
+    return true;
+  }
+
+  close(): void {
+    this._closing = true;
+    this.maybeEnd();
+  }
+
+  maybeEnd(): void {
+    if (this._closing) {
+      this._sink.end();
+    }
+  }
+}

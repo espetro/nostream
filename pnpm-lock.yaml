@@ -11,9 +11,18 @@ importers:
 
   .:
     dependencies:
+      '@chttp/router':
+        specifier: 0.3.0
+        version: 0.3.0
+      '@chttp/ws':
+        specifier: 0.3.0
+        version: 0.3.0(@chttp/router@0.3.0)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
+      '@cutils/sqlite':
+        specifier: file:native/relay/vendor/cutils-sqlite-0.3.0.tgz
+        version: file:native/relay/vendor/cutils-sqlite-0.3.0.tgz
       '@getalby/sdk':
         specifier: ^5.0.0
         version: 5.1.2(typescript@5.7.3)
@@ -382,6 +391,16 @@ packages:
   '@changesets/write@0.4.0':
     resolution: {integrity: sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q==}
 
+  '@chttp/router@0.3.0':
+    resolution: {integrity: sha512-VWFB4oELo+4b1O6et2FXy/6V3xt5tZBeUDZ860h9/13xnBP3brKV1C2ws5PH4lqDolbZ0l+14PhRtugXUNEWzQ==}
+    engines: {node: '>=22'}
+
+  '@chttp/ws@0.3.0':
+    resolution: {integrity: sha512-0xC2fXBH5tHB05NTGHMlnPcjkoMTgTZ0Wm0Uuc41LT8SKPferMVIjbgD4f5DRvwRzrEvfCO2BUFMb2iDlkJmKg==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@chttp/router': ^0.3.0
+
   '@clack/core@1.2.0':
     resolution: {integrity: sha512-qfxof/3T3t9DPU/Rj3OmcFyZInceqj/NVtO9rwIuJqCUgh32gwPjpFQQp/ben07qKlhpwq7GzfWpST4qdJ5Drg==}
 
@@ -518,6 +537,16 @@ packages:
 
   '@cucumber/tag-expressions@6.0.0':
     resolution: {integrity: sha512-JbNb/254Wn6b8cfrIJoqR0NekHXvoB/eMvSY4RK11H8k+YZfm7mZesu/3yVX67nkW+Y+PGjZFcgTMcfjwFRsRw==}
+
+  '@cutils/sqlite@file:native/relay/vendor/cutils-sqlite-0.3.0.tgz':
+    resolution: {integrity: sha512-I+q9AmUgv1NllknnEgEONIOBQWDINdoPZ4m9NTAUcibMrA+hB9tJm1j8WcbdzOrUibGNGPD35QDvBw8/V5kZ6w==, tarball: file:native/relay/vendor/cutils-sqlite-0.3.0.tgz}
+    version: 0.3.0
+    engines: {node: '>=22'}
+    peerDependencies:
+      koffi: ^2.14.1
+    peerDependenciesMeta:
+      koffi:
+        optional: true
 
   '@ericcornelissen/bash-parser@0.5.3':
     resolution: {integrity: sha512-9Z0sGuXqf6En19qmwB0Syi1Mc8TYl756dNuuaYal9mrypKa0Jq/IX6aJfh6Rk2S3z66KBisWTqloDo7weYj4zg==}
@@ -3810,6 +3839,12 @@ snapshots:
       human-id: 4.1.3
       prettier: 2.8.8
 
+  '@chttp/router@0.3.0': {}
+
+  '@chttp/ws@0.3.0(@chttp/router@0.3.0)':
+    dependencies:
+      '@chttp/router': 0.3.0
+
   '@clack/core@1.2.0':
     dependencies:
       fast-wrap-ansi: 0.1.6
@@ -4051,6 +4086,8 @@ snapshots:
       ts-dedent: 2.2.0
 
   '@cucumber/tag-expressions@6.0.0': {}
+
+  '@cutils/sqlite@file:native/relay/vendor/cutils-sqlite-0.3.0.tgz': {}
 
   '@ericcornelissen/bash-parser@0.5.3':
     dependencies:
