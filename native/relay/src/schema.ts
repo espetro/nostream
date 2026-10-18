@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS events (
   deleted_at TIMESTAMP,
   expires_at INTEGER UNSIGNED,
   remote_address TEXT,
-  event_deduplication TEXT
+  event_deduplication TEXT,
+  -- 0 = pending sig verification, 1 = verified (servable), -1 = failed
+  verified INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS events_event_id_idx ON events (event_id);
