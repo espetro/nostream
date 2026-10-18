@@ -77,7 +77,7 @@ export class SqliteEventStore {
     this._db.exec('PRAGMA synchronous = NORMAL')
   }
 
-  saveEvent(event: Event): SaveResult {
+  saveEvent(event: Event, verified: number): SaveResult {
     const dedup = deduplicationOf(event)
     const replaceable =
       isReplaceableKind(event.kind) || isParameterizedReplaceableKind(event.kind)
@@ -90,6 +90,7 @@ export class SqliteEventStore {
       JSON.stringify(event.tags),
       hexToBytes(event.sig),
       dedup,
+      verified,
     ]
     if (replaceable) {
       // NIP-16/33 upsert: newest (created_at, then lowest id) wins, matching
@@ -97,8 +98,8 @@ export class SqliteEventStore {
       const stmt = this._db.prepareRaw(
         `INSERT INTO events
            (event_id, event_pubkey, event_kind, event_created_at, event_content,
-            event_tags, event_signature, event_deduplication)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            event_tags, event_signature, event_deduplication, verified)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (event_pubkey, event_kind, event_deduplication)
            WHERE
              (event_kind = 0 OR event_kind = 3 OR event_kind = 41
@@ -110,6 +111,7 @@ export class SqliteEventStore {
            event_content = excluded.event_content,
            event_tags = excluded.event_tags,
            event_signature = excluded.event_signature,
+           verified = excluded.verified,
            expires_at = NULL
          WHERE events.event_created_at < excluded.event_created_at
             OR (events.event_created_at = excluded.event_created_at
@@ -125,8 +127,8 @@ export class SqliteEventStore {
     const stmt = this._db.prepareRaw(
       `INSERT OR IGNORE INTO events
          (event_id, event_pubkey, event_kind, event_created_at, event_content,
-          event_tags, event_signature, event_deduplication)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          event_tags, event_signature, event_deduplication, verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     stmt.run(params)
     stmt.finalize()
@@ -134,6 +136,25 @@ export class SqliteEventStore {
       return { stored: false, duplicate: true, stale: false }
     }
     return { stored: true, duplicate: false, stale: false }
+  }
+
+  setVerified(id: string, verified: number): void {
+    const stmt = this._db.prepareRaw(
+      'UPDATE events SET verified = ? WHERE event_id = ?',
+    )
+    stmt.run([verified, hexToBytes(id)])
+    stmt.finalize()
+  }
+
+  // Quarantine: retract every not-yet-rejected event from a pubkey whose
+  // signature just failed, so one bad actor can't keep a backlog of
+  // unverified-but-stored junk.
+  quarantinePubkey(pubkey: string): void {
+    const stmt = this._db.prepareRaw(
+      'UPDATE events SET verified = -1 WHERE event_pubkey = ? AND verified = 0',
+    )
+    stmt.run([hexToBytes(pubkey)])
+    stmt.finalize()
   }
 
   count(): number {
@@ -221,7 +242,7 @@ export class SqliteEventStore {
         clauses.push('(' + parts.join(' AND ') + ')')
       }
     }
-    let where = 'deleted_at IS NULL'
+    let where = 'deleted_at IS NULL AND verified = 1'
     if (clauses.length > 0) {
       where += ' AND (' + clauses.join(' OR ') + ')'
     }
