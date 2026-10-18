@@ -32,6 +32,7 @@ const targets = {
       RELAY_DB_FILE: `/tmp/bench-${TARGET}.db`,
       RELAY_MAX_LIMIT: '500',
       RELAY_SKIP_SIG_VERIFY: '0',
+      RELAY_VERIFY_MODE: process.env.RELAY_VERIFY_MODE || 'sync',
     },
     dbFiles: [`/tmp/bench-${TARGET}.db`],
   },

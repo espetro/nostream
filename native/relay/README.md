@@ -33,7 +33,33 @@ BIP-340 schnorr + SHA-256).
 Env vars: `RELAY_PORT` (8008), `RELAY_DB_FILE` (`relay.db`, `:memory:` allowed),
 `RELAY_MAX_SUBS` (16), `RELAY_MAX_FILTERS` (8), `RELAY_DEFAULT_LIMIT` (100),
 `RELAY_MAX_LIMIT` (500), `RELAY_MAX_CONTENT_BYTES` (65536),
-`RELAY_SKIP_SIG_VERIFY` (bench aid — never in production).
+`RELAY_SKIP_SIG_VERIFY` (bench aid — never in production),
+`RELAY_VERIFY_MODE` (`sync` | `optimistic`, default `sync`),
+`RELAY_NAME`/`RELAY_CONTACT` (NIP-11 document fields).
+
+## Signature-verification modes
+
+Sig verify is ~94% of the sync ingest path on this box (9081 ev/s unverified
+ceiling vs ~534 verified), so the relay ships two policies:
+
+- **`sync` (default)** — verify before store/OK, upstream semantics.
+- **`optimistic`** — store with `verified=0`, `OK` immediately, then a bounded
+  queue (4096; overflow degrades to inline sync verify) drains after each
+  inbound frame. REQ and fanout only ever touch `verified=1` rows — nothing
+  invalid is ever served or broadcast; a failure tombstones the event
+  (`verified=-1`), NOTICEs the sender, and quarantines the pubkey (all its
+  pending unverified rows are retracted and future events verify inline).
+
+Measured (same corpus/sockets as below):
+
+| mode        | ev/s | OK p50 ms | note                                  |
+| ----------- | ---: | --------: | ------------------------------------- |
+| sync        |  534 |     236   | default                               |
+| optimistic  | 3908 |      10.3 | safe: verified=1 gate on REQ + fanout |
+
+Optimistic still verifies every event — it converts per-event latency into
+throughput by pipelining verify behind the ACK; adversarially it's identical
+to sync for servability (verified=1 gate), only OK ordering differs.
 
 ## Measured (this box, 60k-event corpus, 4 concurrent sockets, 30s sustained)
 
