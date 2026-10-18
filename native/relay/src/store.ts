@@ -136,6 +136,16 @@ export class SqliteEventStore {
     return { stored: true, duplicate: false, stale: false }
   }
 
+  count(): number {
+    const stmt = this._db.prepareRaw(
+      'SELECT count(*) AS n FROM events WHERE deleted_at IS NULL',
+    )
+    const rows = stmt.all([])
+    stmt.finalize()
+    const row = rows[0] as { n: number }
+    return row.n
+  }
+
   // OR over the filter list, each filter AND'd internally — same shape as
   // upstream's query builder. ids/authors are hex-prefix matched on the
   // BLOB columns via hex(...) LIKE, like upstream's prefix search.

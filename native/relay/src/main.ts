@@ -59,8 +59,35 @@ const db =
 const store = new SqliteEventStore(db, limits.maxLimit)
 const handler = new RelayHandler(store, limits, skipSig)
 
+const relayName = envStr('RELAY_NAME', 'nostream-native')
+const relayContact = envStr('RELAY_CONTACT', '')
+
 const app = createRouter()
-app.get('/', (c) => c.text('nostream-native: nostr relay, connect over ws'))
+app.get('/healthz', (c) => c.json({ ok: true }))
+app.get('/stats', (c) =>
+  c.json({
+    events: store.count(),
+    connections: handler.stats().connections,
+    subscriptions: handler.stats().subscriptions,
+  }),
+)
+// NIP-11 relay information document on `Accept: application/nostr+json`;
+// plain text status otherwise.
+app.get('/', (c) => {
+  const accept = c.req.header('accept')
+  if (accept !== null && accept.indexOf('application/nostr+json') >= 0) {
+    return c.json({
+      name: relayName,
+      description:
+        'scriptc-compiled nostream relay — single-ELF NIP-01 over @chttp/ws + @cutils/sqlite',
+      contact: relayContact,
+      supported_nips: [1, 11, 16, 33],
+      software: 'nostream-native',
+      version: '0.1.0',
+    })
+  }
+  return c.text('nostream-native: nostr relay, connect over ws')
+})
 
 const ws = new WsRouter()
 ws.ws('/', handler)

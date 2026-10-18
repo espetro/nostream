@@ -240,6 +240,14 @@ export class RelayHandler extends WsHandler {
     this._removeSub(state, msg[1] as string)
   }
 
+  stats(): { connections: number; subscriptions: number } {
+    let subs = 0
+    for (let i = 0; i < this._conns.length; i++) {
+      subs += this._conns[i].subs.length
+    }
+    return { connections: this._conns.length, subscriptions: subs }
+  }
+
   _fanout(event: Event): void {
     for (let i = 0; i < this._conns.length; i++) {
       const state = this._conns[i]
